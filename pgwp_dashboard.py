@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# Replace with your actual published Google Sheets CSV link
 DATA_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR1ov2sXCFcwxxQ3Vc8_6kM7egCnk7FcNzUWjH2d32tJ2rLO1Yr9D9OdUP9PEArdWdcygJYax0BhXuv/pub?output=csv"
 
 st.set_page_config(
@@ -11,15 +10,15 @@ st.set_page_config(
     layout="wide"
 )
 
-@st.cache_data
+@st.cache_data(ttl=60)
 def load_data():
     df = pd.read_csv(DATA_URL)
 
-    # Remove accidental leading/trailing spaces from column names and text cells
+    # Clean columns and text values
     df.columns = df.columns.str.strip()
-    df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+    df = df.apply(lambda col: col.map(lambda x: x.strip() if isinstance(x, str) else x))
 
-    # Rename long Google Form headers to short internal names
+    # Rename long Google Form headers to shorter internal names
     df = df.rename(columns={
         "Timestamp": "timestamp",
         "Country of citizenship": "country",
@@ -49,16 +48,31 @@ def load_data():
 
 df = load_data()
 
+# Manual refresh
+if st.button("Refresh data"):
+    st.cache_data.clear()
+    st.rerun()
+
 st.title("PGWP Refusal & Reconsideration Dashboard")
-st.caption("Community data analysis of PGWP refusals related to language test submission.")
+st.markdown(
+    """
+    Community-driven dashboard tracking PGWP refusals related to missing language test
+    documents, reconsideration outcomes, restoration actions, and MP involvement.
+    """
+)
+st.caption("Anonymous survey-based data for community trend analysis. Data refreshes automatically every 60 seconds.")
 
 # Sidebar filters
-st.sidebar.header("Filters")
+st.sidebar.title("Filters")
+st.sidebar.caption("Use these to explore the responses.")
 
-country_options = ["All"] + sorted(df["country"].dropna().unique().tolist())
-program_options = ["All"] + sorted(df["program_type"].dropna().unique().tolist())
-status_options = ["All"] + sorted(df["reconsideration_status"].dropna().unique().tolist())
-test_options = ["All"] + sorted(df["language_test_type"].dropna().unique().tolist())
+def get_options(series):
+    return ["All"] + sorted([str(x) for x in series.dropna().unique().tolist()])
+
+country_options = get_options(df["country"])
+program_options = get_options(df["program_type"])
+status_options = get_options(df["reconsideration_status"])
+test_options = get_options(df["language_test_type"])
 
 selected_country = st.sidebar.selectbox("Country", country_options)
 selected_program = st.sidebar.selectbox("Program Type", program_options)
@@ -80,47 +94,54 @@ if selected_test != "All":
     filtered_df = filtered_df[filtered_df["language_test_type"] == selected_test]
 
 # Metrics
-col1, col2, col3 = st.columns(3)
-col1.metric("Total Responses", len(filtered_df))
-col2.metric(
-    "Had Test Before Applying",
-    int((filtered_df["test_taken_before"] == "Yes").sum())
-)
-col3.metric(
-    "MP Contacted",
-    int((filtered_df["mp_contacted"] == "Yes").sum())
-)
+approved_count = (filtered_df["reconsideration_status"] == "Approved").sum()
+refused_count = (filtered_df["reconsideration_status"] == "Refused").sum()
+pending_count = (filtered_df["reconsideration_status"] == "Still waiting").sum()
 
-# Helper for safe counts
+decided_df = filtered_df[filtered_df["reconsideration_status"].isin(["Approved", "Refused"])]
+success_rate = 0.0
+if len(decided_df) > 0:
+    success_rate = round((decided_df["reconsideration_status"] == "Approved").mean() * 100, 1)
+
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Total Responses", len(filtered_df))
+m2.metric("Approved", int(approved_count))
+m3.metric("Pending", int(pending_count))
+m4.metric("Approval Rate", f"{success_rate}%")
+
+# Helpers
 def count_df(series, x_name="Category", y_name="Count"):
-    vc = series.fillna("Unknown").value_counts().reset_index()
+    vc = series.fillna("Unknown").astype(str).value_counts().reset_index()
     vc.columns = [x_name, y_name]
     return vc
 
-# Charts
-row1_col1, row1_col2 = st.columns(2)
+# Row 1
+c1, c2 = st.columns(2)
 
-with row1_col1:
+with c1:
     fig1 = px.pie(
         count_df(filtered_df["test_taken_before"], "Test Taken Before", "Count"),
         names="Test Taken Before",
         values="Count",
         title="Language Test Taken Before PGWP Application"
     )
+    fig1.update_layout(legend_title_text="")
     st.plotly_chart(fig1, use_container_width=True)
 
-with row1_col2:
+with c2:
     fig2 = px.pie(
         count_df(filtered_df["missing_reason"], "Missing Reason", "Count"),
         names="Missing Reason",
         values="Count",
         title="Why the Language Test Was Missing"
     )
+    fig2.update_layout(legend_title_text="")
     st.plotly_chart(fig2, use_container_width=True)
 
-row2_col1, row2_col2 = st.columns(2)
+# Row 2
+c3, c4 = st.columns(2)
 
-with row2_col1:
+with c3:
     fig3 = px.bar(
         count_df(filtered_df["reconsideration_status"], "Reconsideration Status", "Count"),
         x="Reconsideration Status",
@@ -130,7 +151,7 @@ with row2_col1:
     )
     st.plotly_chart(fig3, use_container_width=True)
 
-with row2_col2:
+with c4:
     fig4 = px.bar(
         count_df(filtered_df["mp_contacted"], "MP Contacted", "Count"),
         x="MP Contacted",
@@ -140,9 +161,10 @@ with row2_col2:
     )
     st.plotly_chart(fig4, use_container_width=True)
 
-row3_col1, row3_col2 = st.columns(2)
+# Row 3
+c5, c6 = st.columns(2)
 
-with row3_col1:
+with c5:
     fig5 = px.bar(
         count_df(filtered_df["reconsideration_timing"], "Timing", "Count"),
         x="Timing",
@@ -152,9 +174,9 @@ with row3_col1:
     )
     st.plotly_chart(fig5, use_container_width=True)
 
-with row3_col2:
+with c6:
     fig6 = px.bar(
-        count_df(filtered_df["webform_count"].astype(str), "Webforms Submitted", "Count"),
+        count_df(filtered_df["webform_count"], "Webforms Submitted", "Count"),
         x="Webforms Submitted",
         y="Count",
         title="Number of IRCC Webforms Submitted",
@@ -162,9 +184,10 @@ with row3_col2:
     )
     st.plotly_chart(fig6, use_container_width=True)
 
-row4_col1, row4_col2 = st.columns(2)
+# Row 4
+c7, c8 = st.columns(2)
 
-with row4_col1:
+with c7:
     fig7 = px.bar(
         count_df(filtered_df["restoration_status"], "Restoration Applied", "Count"),
         x="Restoration Applied",
@@ -174,7 +197,7 @@ with row4_col1:
     )
     st.plotly_chart(fig7, use_container_width=True)
 
-with row4_col2:
+with c8:
     fig8 = px.bar(
         count_df(filtered_df["contacted_ircc_before_refusal"], "Contacted IRCC Before Refusal", "Count"),
         x="Contacted IRCC Before Refusal",
@@ -184,6 +207,63 @@ with row4_col2:
     )
     st.plotly_chart(fig8, use_container_width=True)
 
-# Raw data section
+# Advanced analysis 1
+st.subheader("Approval Outcome by MP Involvement")
+mp_outcome_df = (
+    filtered_df.groupby(["mp_contacted", "reconsideration_status"])
+    .size()
+    .reset_index(name="count")
+)
+
+if not mp_outcome_df.empty:
+    fig_mp_outcome = px.bar(
+        mp_outcome_df,
+        x="mp_contacted",
+        y="count",
+        color="reconsideration_status",
+        barmode="group",
+        title="Outcome vs MP Involvement",
+        labels={
+            "mp_contacted": "MP Contacted",
+            "count": "Cases",
+            "reconsideration_status": "Outcome"
+        }
+    )
+    st.plotly_chart(fig_mp_outcome, use_container_width=True)
+
+# Advanced analysis 2
+st.subheader("Reconsideration Timing vs Outcome")
+timing_outcome_df = (
+    filtered_df.groupby(["reconsideration_timing", "reconsideration_status"])
+    .size()
+    .reset_index(name="count")
+)
+
+if not timing_outcome_df.empty:
+    fig_timing_outcome = px.bar(
+        timing_outcome_df,
+        x="reconsideration_timing",
+        y="count",
+        color="reconsideration_status",
+        barmode="group",
+        title="How Fast Reconsideration Was Requested vs Outcome",
+        labels={
+            "reconsideration_timing": "Timing",
+            "count": "Cases",
+            "reconsideration_status": "Outcome"
+        }
+    )
+    st.plotly_chart(fig_timing_outcome, use_container_width=True)
+
+# Raw data + download
+st.subheader("Download Data")
+csv = filtered_df.to_csv(index=False).encode("utf-8")
+st.download_button(
+    label="Download filtered data as CSV",
+    data=csv,
+    file_name="pgwp_filtered_data.csv",
+    mime="text/csv"
+)
+
 with st.expander("Show raw data"):
     st.dataframe(filtered_df, use_container_width=True)
